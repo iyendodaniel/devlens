@@ -6,7 +6,7 @@ __pycache__/
 # Frontend
 node_modules/
 devlens-ui-main/dist/
-
+devlens-ui-main/
 # Build output
 backend/dist/
 backend/build/
