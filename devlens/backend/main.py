@@ -23,6 +23,7 @@ def resource_path(*parts: str) -> str:
 
 def main():
     api = DevLensAPI()
+    url = resource_path("frontend", "dist", "index.html")
     window = webview.create_window(
         "DevLens",
         url,
