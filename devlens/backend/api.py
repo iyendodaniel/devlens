@@ -172,3 +172,16 @@ class DevLensAPI:
         conn.commit()
         conn.close()
         return {"scanned": len(found), "at": now}
+
+    def minimizeWindow(self):
+        self._window.minimize()
+
+    def toggleMaximize(self):
+        if self._window.maximized:
+            self._window.restore()
+        else:
+            self._window.maximize()
+
+    def closeWindow(self):
+        self._window.destroy()
+

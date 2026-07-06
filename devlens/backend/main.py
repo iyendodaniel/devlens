@@ -25,11 +25,12 @@ def main():
     api = DevLensAPI()
     window = webview.create_window(
         "DevLens",
-        resource_path("frontend", "dist", "index.html"),
+        url,
         js_api=api,
-        width=1100,
-        height=720,
+        frameless=True,
+        easy_drag=False,
         background_color="#0f0f0f",
+        min_size=(960, 600),
     )
     api._window = window  # underscore matters here - see note in api.py
     webview.start()
