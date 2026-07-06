@@ -1,0 +1,16 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Frontend
+node_modules/
+devlens-ui-main/dist/
+
+# Build output
+backend/dist/
+backend/build/
+*.spec.bak
+
+# misc
+tsconfig.tsbuildinfo
