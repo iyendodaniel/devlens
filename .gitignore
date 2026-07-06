@@ -7,9 +7,10 @@ __pycache__/
 node_modules/
 devlens-ui-main/dist/
 devlens-ui-main/
+
 # Build output
-backend/dist/
-backend/build/
+devlens/backend/dist/
+devlens/backend/build/
 *.spec.bak
 
 # misc
