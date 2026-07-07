@@ -4,6 +4,10 @@ from datetime import datetime
 from db import get_connection
 import scanner
 import webview
+import os
+import platform
+import shutil
+import subprocess
 
 
 class DevLensAPI:
@@ -184,4 +188,97 @@ class DevLensAPI:
 
     def closeWindow(self):
         self._window.destroy()
+
+
+    def setFrontendPath(self, project_id):
+        result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+
+        if not result:
+            conn = get_connection()
+            row = conn.execute(
+                "SELECT * FROM projects WHERE id = ?", (project_id,)
+            ).fetchone()
+            conn.close()
+            return dict(row) if row else None
+
+        folder_path = result[0]
+
+        conn = get_connection()
+        conn.execute(
+            "UPDATE projects SET frontend_path = ? WHERE id = ?",
+            (folder_path, project_id),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        conn.close()
+        return dict(row)
+
+
+    def buildFrontend(self, project_id):
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        conn.close()
+
+        frontend_path = row["frontend_path"] if row else None
+
+        if not frontend_path or not os.path.isdir(frontend_path):
+            return {"ok": False, "output": "", "error": "No valid frontend folder set for this project."}
+
+        npm_cmd = "npm.cmd" if platform.system() == "Windows" else "npm"
+
+        try:
+            result = subprocess.run(
+                [npm_cmd, "run", "build"],
+                cwd=frontend_path,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            return {"ok": False, "output": "", "error": "npm was not found. Is Node.js installed?"}
+
+        if result.returncode == 0:
+            return {"ok": True, "output": result.stdout + result.stderr}
+        else:
+            return {
+                "ok": False,
+                "output": result.stdout + result.stderr,
+                "error": f"npm run build exited with code {result.returncode}",
+            }
+
+
+    def pickBuildDestination(self):
+        result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not result:
+            return None
+        return result[0]
+
+
+    def copyDistTo(self, project_id, destination):
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        conn.close()
+
+        frontend_path = row["frontend_path"] if row else None
+        if not frontend_path:
+            return {"ok": False, "output": "", "error": "No frontend folder set."}
+
+        dist_path = os.path.join(frontend_path, "dist")
+
+        if not os.path.isdir(dist_path):
+            return {"ok": False, "output": "", "error": "No dist/ folder found — did the build run?"}
+
+        target_path = os.path.join(destination, "dist")
+
+        try:
+            shutil.copytree(dist_path, target_path, dirs_exist_ok=True)
+            return {"ok": True, "output": f"Copied dist/ -> {target_path}"}
+        except Exception as e:
+            return {"ok": False, "output": "", "error": str(e)}
 

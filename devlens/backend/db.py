@@ -50,6 +50,11 @@ def init_db():
         )
     """)
 
+    try:
+        conn.execute("ALTER TABLE projects ADD COLUMN frontend_path TEXT")
+    except sqlite3.OperationalError:
+        pass 
+
     conn.commit()
     conn.close()
 
