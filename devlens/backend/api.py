@@ -8,6 +8,62 @@ import os
 import platform
 import shutil
 import subprocess
+import shlex
+
+
+# ---- Built-in Actions ----
+# Predefined, per-project workflows shipped with DevLens. Seeded into the
+# `actions` table the first time a project's Actions are loaded, then stored
+# like any other row so they're editable from there on — this dict is only
+# ever read for a brand-new project, never re-applied over a user's edits.
+#
+# Step shapes:
+#   command   -> {"type": "command", "command": str, "cwd": "project"|"frontend", "explanation": str}
+#   operation -> {"type": "operation", "operation": str, "explanation": str}
+# "operation" steps describe something the backend does natively (copying a
+# folder, etc.) rather than a shell command — there's no literal command to
+# show, so the preview renders `operation` where it would otherwise render
+# `command`.
+BUILT_IN_ACTIONS = {
+    "build_frontend": {
+        "name": "Build Frontend",
+        "steps": [
+            {
+                "type": "command",
+                "command": "npm run build",
+                "cwd": "frontend",
+                "explanation": "Builds the production version of the frontend.",
+            },
+            {
+                "type": "operation",
+                "operation": "Copy the generated dist folder.",
+                "explanation": "Copies the production build output.",
+            },
+            {
+                "type": "operation",
+                "operation": "Move or copy the folder to the configured backend directory.",
+                "explanation": "Makes the latest frontend available to the backend for serving.",
+            },
+        ],
+    },
+    "python_migrations": {
+        "name": "Python Migrations",
+        "steps": [
+            {
+                "type": "command",
+                "command": "python manage.py makemigrations",
+                "cwd": "project",
+                "explanation": "Creates new migration files based on changes made to Django models.",
+            },
+            {
+                "type": "command",
+                "command": "python manage.py migrate",
+                "cwd": "project",
+                "explanation": "Applies all pending migrations to the project's database.",
+            },
+        ],
+    },
+}
 
 
 class DevLensAPI:
@@ -216,6 +272,115 @@ class DevLensAPI:
         conn.close()
         return dict(row)
 
+
+    # ---- Actions (generic) ----
+    def _action_to_dict(self, row):
+        d = dict(row)
+        d["steps"] = json.loads(d["steps"])
+        d["built_in"] = bool(d["built_in"])
+        return d
+
+    def getActions(self, project_id):
+        conn = get_connection()
+        existing = conn.execute(
+            "SELECT key FROM actions WHERE project_id = ?", (project_id,)
+        ).fetchall()
+        have = {r["key"] for r in existing}
+
+        now = datetime.utcnow().isoformat()
+        for key, defaults in BUILT_IN_ACTIONS.items():
+            if key in have:
+                continue
+            conn.execute(
+                "INSERT INTO actions (id, project_id, key, name, built_in, execution_mode, steps, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, 1, 'learning', ?, ?, ?)",
+                (f"act_{uuid.uuid4().hex[:8]}", project_id, key, defaults["name"],
+                 json.dumps(defaults["steps"]), now, now),
+            )
+        conn.commit()
+
+        rows = conn.execute(
+            "SELECT * FROM actions WHERE project_id = ? ORDER BY built_in DESC, created_at ASC",
+            (project_id,),
+        ).fetchall()
+        conn.close()
+        return [self._action_to_dict(r) for r in rows]
+
+    def updateAction(self, id, patch):
+        conn = get_connection()
+        row = conn.execute("SELECT * FROM actions WHERE id = ?", (id,)).fetchone()
+        if not row:
+            conn.close()
+            return None
+        existing = self._action_to_dict(row)
+        merged_name = patch.get("name", existing["name"])
+        merged_mode = patch.get("execution_mode", existing["execution_mode"])
+        merged_steps = patch.get("steps", existing["steps"])
+        now = datetime.utcnow().isoformat()
+        conn.execute(
+            "UPDATE actions SET name = ?, execution_mode = ?, steps = ?, updated_at = ? WHERE id = ?",
+            (merged_name, merged_mode, json.dumps(merged_steps), now, id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM actions WHERE id = ?", (id,)).fetchone()
+        conn.close()
+        return self._action_to_dict(row)
+
+    def runCommandStep(self, project_id, cwd_kind, command):
+        """Runs one `command`-type step. cwd_kind is "project" (the Django
+        root Endpoint Explorer scans) or "frontend" (project.frontend_path).
+        Used by command-only actions like Python Migrations; Build Frontend
+        keeps its own buildFrontend/copyDistTo methods below since the npm
+        step needs OS-specific binary resolution and the copy step isn't a
+        shell command at all.
+        """
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        conn.close()
+        if not row:
+            return {"ok": False, "output": "", "error": "Project not found."}
+
+        cwd = row["frontend_path"] if cwd_kind == "frontend" else row["path"]
+        if not cwd or not os.path.isdir(cwd):
+            missing = "frontend folder" if cwd_kind == "frontend" else "project folder"
+            return {"ok": False, "output": "", "error": f"No valid {missing} configured."}
+
+        try:
+            args = command if platform.system() == "Windows" else shlex.split(command)
+            result = subprocess.run(
+                args,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                shell=platform.system() == "Windows",
+            )
+        except FileNotFoundError as e:
+            return {"ok": False, "output": "", "error": f"Command not found: {e}"}
+
+        if result.returncode == 0:
+            return {"ok": True, "output": result.stdout + result.stderr}
+        return {
+            "ok": False,
+            "output": result.stdout + result.stderr,
+            "error": f"`{command}` exited with code {result.returncode}",
+        }
+
+    def setBuildDestination(self, project_id):
+        """Configures project.build_destination_path once, so Automation
+        Mode's copy step never has to interrupt the run with a picker."""
+        result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        conn = get_connection()
+        if result:
+            conn.execute(
+                "UPDATE projects SET build_destination_path = ? WHERE id = ?",
+                (result[0], project_id),
+            )
+            conn.commit()
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        conn.close()
+        return dict(row) if row else None
 
     def buildFrontend(self, project_id):
         conn = get_connection()

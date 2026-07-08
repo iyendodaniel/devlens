@@ -55,6 +55,28 @@ def init_db():
     except sqlite3.OperationalError:
         pass 
 
+    # Configured once via Actions -> Build Frontend, then reused on every run
+    # so Automation Mode never has to stop and ask where the build goes.
+    try:
+        conn.execute("ALTER TABLE projects ADD COLUMN build_destination_path TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS actions (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            key TEXT NOT NULL,
+            name TEXT NOT NULL,
+            built_in INTEGER NOT NULL DEFAULT 0,
+            execution_mode TEXT NOT NULL DEFAULT 'learning',
+            steps TEXT NOT NULL,
+            created_at TEXT,
+            updated_at TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects (id)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
